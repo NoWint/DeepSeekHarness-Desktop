@@ -16,5 +16,6 @@
     "jsx": "react-jsx",
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.web.tsbuildinfo"
   },
+  "references": [{ "path": "./tsconfig.shared.json" }],
   "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"]
 }

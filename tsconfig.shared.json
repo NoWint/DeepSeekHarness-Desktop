@@ -12,10 +12,10 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "outDir": "dist/main",
-    "rootDir": "src",
-    "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo"
+    "outDir": "dist/shared",
+    "rootDir": "src/shared",
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.shared.tsbuildinfo"
   },
-  "references": [{ "path": "./tsconfig.shared.json" }],
-  "include": ["src/main/**/*.ts", "src/preload/**/*.ts"]
+  "include": ["src/shared/**/*.ts"],
+  "exclude": ["src/shared/**/*.test.ts"]
 }

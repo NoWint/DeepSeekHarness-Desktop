@@ -9,13 +9,8 @@
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
-    "outDir": "dist/main",
-    "rootDir": "src",
-    "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo"
+    "noEmit": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.tooling.tsbuildinfo"
   },
-  "references": [{ "path": "./tsconfig.shared.json" }],
-  "include": ["src/main/**/*.ts", "src/preload/**/*.ts"]
+  "include": ["vite.config.ts", "vitest.config.ts"]
 }
