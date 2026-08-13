@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "compilerOptions": {
+    "strict": true
+  },
+  "references": [
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.web.json" }
+  ]
+}
