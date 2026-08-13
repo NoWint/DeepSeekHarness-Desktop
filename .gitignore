@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+release/
+coverage/
+.env
+.env.*
+!.env.example
+.worktrees/
+.superpowers/
+resources/node/
+resources/harness/
+*.log
+.DS_Store
