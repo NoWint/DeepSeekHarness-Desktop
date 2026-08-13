@@ -32,12 +32,12 @@ test("package manifest exposes the shared project quality and packaging scripts"
     );
   }
 
-  assert.equal(manifest.engines?.node, ">=22.20.0");
+  assert.equal(manifest.engines?.node, ">=22.19.0");
   assert.equal(manifest.packageManager, "pnpm@10.15.0");
-  assert.equal(
-    await readFile(new URL("../.node-version", import.meta.url), "utf8"),
-    "22.20.0\n",
-  );
+  assert.deepEqual(manifest.volta, {
+    node: "22.20.0",
+    pnpm: "10.15.0",
+  });
 });
 
 test("Node and web TypeScript projects use strict compiler settings and share IPC contracts", async () => {
@@ -60,6 +60,8 @@ test("Node and web TypeScript projects use strict compiler settings and share IP
   assert.deepEqual(nodeConfig.references, [{ path: "./tsconfig.shared.json" }]);
   assert.deepEqual(webConfig.references, [{ path: "./tsconfig.shared.json" }]);
   assert.deepEqual(sharedConfig.include, ["src/shared/**/*.ts"]);
+  assert.equal(sharedConfig.compilerOptions?.outDir, "dist/main");
+  assert.equal(sharedConfig.compilerOptions?.rootDir, "src");
   assert.equal(nodeConfig.include.includes("src/shared/**/*.ts"), false);
   assert.equal(webConfig.include.includes("src/shared/**/*.ts"), false);
 });

@@ -12,8 +12,8 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "outDir": "dist/shared",
-    "rootDir": "src/shared",
+    "outDir": "dist/main",
+    "rootDir": "src",
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.shared.tsbuildinfo"
   },
   "include": ["src/shared/**/*.ts"],
