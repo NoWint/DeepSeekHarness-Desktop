@@ -1,0 +1,24 @@
+name: Dependabot
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  dependabot:
+    name: Dependabot auto-merge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dependabot/fetch-metadata@v2
+        id: metadata
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Auto-merge minor and patch updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: |
+          gh pr checkout -- ${{ steps.metadata.outputs.pull-request-number }}
+          gh pr merge --auto --merge

@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node scripts/check-package.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: built-dist
+          path: dist/
+          retention-days: 7
+
+  package-mac:
+    name: Package macOS
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package -- --mac dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg
+          path: out/*.dmg
+          retention-days: 14
+
+  package-win:
+    name: Package Windows
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package -- --win nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-nsis
+          path: out/*.exe
+          retention-days: 14
+
+  package-linux:
+    name: Package Linux
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm package -- --linux AppImage deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: out/*.{AppImage,deb}
+          retention-days: 14
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [package-mac, package-win, package-linux]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: out/
+
+      - run: |
+          ls -la out/
+          find out/ -type f | head -50
+        name: List artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/**/*.dmg
+          draft: true
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/**/*.exe
+          draft: true
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/**/*.{AppImage,deb}
+          draft: true
+          prerelease: ${{ contains(github.ref, '-beta') || contains(github.ref, '-alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,3 +12,8 @@ resources/node/
 resources/harness/
 *.log
 .DS_Store
+.Tencent/
+.idea/
+.vscode/
+*.tsbuildinfo
+.pnpm-store/

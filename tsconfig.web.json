@@ -14,8 +14,9 @@
     "emitDeclarationOnly": true,
     "outDir": "dist/types",
     "jsx": "react-jsx",
+    "types": ["vite/client", "./src/renderer/types/electron.d.ts"],
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.web.tsbuildinfo"
   },
   "references": [{ "path": "./tsconfig.shared.json" }],
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"]
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/renderer/types/**/*.d.ts"]
 }

@@ -29,6 +29,7 @@ export type RuntimeError =
       code: "unexpected-exit";
       message: string;
       exitCode: number | null;
+      recoverable?: boolean;
     }
   | {
       kind: "runtime-error";
@@ -54,7 +55,7 @@ export type RuntimeStatus =
       kind: "runtime-status";
       state: "starting" | "stopping";
       updatedAt: string;
-      attempt: number;
+      attempt?: number;
       message: string;
     }
   | {
