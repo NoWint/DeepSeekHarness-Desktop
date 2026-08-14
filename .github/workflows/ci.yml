@@ -65,7 +65,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: node scripts/check-package.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: built-dist
           path: dist/
@@ -89,7 +89,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm package -- --mac dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mac-dmg
           path: out/*.dmg
@@ -113,7 +113,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm package -- --win nsis
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: win-nsis
           path: out/*.exe
@@ -143,7 +143,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm package -- --linux AppImage deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: out/*.{AppImage,deb}
