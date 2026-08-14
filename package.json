@@ -28,13 +28,13 @@
     "verify:package": "node scripts/check-package.mjs"
   },
   "dependencies": {
-    "react": "19.1.1",
+    "react": "19.2.8",
     "react-dom": "19.1.1"
   },
   "devDependencies": {
     "@eslint/js": "9.34.0",
     "@types/node": "22.18.0",
-    "@types/react": "19.1.10",
+    "@types/react": "19.2.18",
     "@types/react-dom": "19.1.7",
     "@vitejs/plugin-react": "5.0.2",
     "concurrently": "^10.0.4",
