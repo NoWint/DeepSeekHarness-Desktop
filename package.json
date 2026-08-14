@@ -14,7 +14,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "dev": "vite --config vite.config.ts",
+    "dev": "concurrently -n vite,electron -c blue,yellow 'vite --config vite.config.ts' 'wait-on http://127.0.0.1:5173 && cross-env NODE_ENV=development electron dist/main/main/index.js'",
     "build": "pnpm typecheck && pnpm build:renderer && pnpm build:electron",
     "build:renderer": "vite build --config vite.config.ts",
     "build:electron": "tsc -b tsconfig.node.json --pretty false",
@@ -37,6 +37,8 @@
     "@types/react": "19.1.10",
     "@types/react-dom": "19.1.7",
     "@vitejs/plugin-react": "5.0.2",
+    "concurrently": "^10.0.4",
+    "cross-env": "^10.1.0",
     "electron": "39.0.0",
     "electron-builder": "26.0.12",
     "electron-builder-squirrel-windows": "26.0.12",
@@ -47,6 +49,7 @@
     "typescript": "5.9.2",
     "typescript-eslint": "8.41.0",
     "vite": "7.1.3",
-    "vitest": "3.2.4"
+    "vitest": "3.2.4",
+    "wait-on": "^9.1.0"
   }
 }

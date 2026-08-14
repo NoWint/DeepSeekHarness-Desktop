@@ -716,14 +716,24 @@ if (!gotLock) {
     mainWindow = createWindow();
 
     const indexPath = path.join(import.meta.dirname, "..", "renderer", "index.html");
-    mainWindow.loadFile(indexPath).catch((err) => {
-      appendLog(`Failed to load renderer: ${String(err)}`);
-    });
 
-    const status = await startRuntime();
-    sendToRenderer("runtime-status", status);
-    if (status.state === "ready") {
-      loadWindowContent(mainWindow, status);
+    // Development mode: load Vite dev server directly
+    if (process.env.NODE_ENV === "development") {
+      mainWindow.loadURL("http://127.0.0.1:5173/").catch((err) => {
+        appendLog(`Failed to load Vite dev server: ${String(err)}`);
+      });
+      // Enable DevTools in development
+      mainWindow.webContents.openDevTools();
+    } else {
+      mainWindow.loadFile(indexPath).catch((err) => {
+        appendLog(`Failed to load renderer: ${String(err)}`);
+      });
+
+      const status = await startRuntime();
+      sendToRenderer("runtime-status", status);
+      if (status.state === "ready") {
+        loadWindowContent(mainWindow, status);
+      }
     }
 
     app.on("activate", () => {
