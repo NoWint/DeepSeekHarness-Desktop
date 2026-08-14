@@ -30,7 +30,13 @@ import {
 import { resolvePlatformPaths, type Platform } from "../shared/platform-paths.js";
 
 const require = createRequire(import.meta.url);
-const pkg = require("../../package.json") as { version: string };
+const pkg = require(path.join(
+  path.dirname(new URL(import.meta.url).pathname),
+  "..",
+  "..",
+  "..",
+  "package.json",
+)) as { version: string };
 
 // ---------------------------------------------------------------------------
 // State
