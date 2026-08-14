@@ -1,55 +1,24 @@
-name: Pull Request
-description: Submit a pull request
-body:
-  - type: markdown
-    attributes:
-      value: |
-        ## Pull Request Checklist
-        Thanks for contributing! Please ensure your PR meets these requirements.
+## Description
 
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: Pre-flight checklist
-      options:
-        - label: "Code follows the project's style (run `pnpm lint` and `pnpm format:check`)"
-        - label: "Type checking passes (`pnpm typecheck`)"
-        - label: "All tests pass (`pnpm test`)"
-        - label: "I have tested the changes locally"
-        - label: "I have updated documentation if needed"
-        - label: "Changes are limited to the desktop integration layer (no upstream Harness modifications)"
+<!-- Describe your changes -->
 
-  - type: input
-    id: related
-    attributes:
-      label: Related issue
-      description: "Link any related issues (e.g., #123)"
-      placeholder: "#123"
-    validations:
-      required: false
+## Type of Change
 
-  - type: textarea
-    id: description
-    attributes:
-      label: Description
-      description: "Briefly describe what this PR changes and why"
-      placeholder: "This PR adds proper error handling for harness startup failures..."
-    validations:
-      required: true
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Packaging / CI
+- [ ] Documentation
+- [ ] Other
 
-  - type: textarea
-    id: testing
-    attributes:
-      label: Testing
-      description: "How did you verify these changes work?"
-      placeholder: "Ran on macOS with and without harness installed..."
-    validations:
-      required: true
+## Testing
 
-  - type: textarea
-    id: screenshots
-    attributes:
-      label: Screenshots (if UI changes)
-      description: "Before/after screenshots for visual changes"
-    validations:
-      required: false
+- [ ] `pnpm test` passes
+- [ ] `pnpm lint` passes
+- [ ] `pnpm typecheck` passes
+- [ ] `pnpm build` succeeds
+
+## Checklist
+
+- [ ] Tests added for new behavior
+- [ ] Documentation updated
+- [ ] No secret values in logs or diagnostics

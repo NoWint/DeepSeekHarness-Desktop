@@ -1,0 +1,24 @@
+title: "Packaging Issue: "
+labels: ["packaging"]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: OS / Architecture
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue Description
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error Output
+      render: shell

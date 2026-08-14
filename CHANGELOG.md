@@ -1,28 +1,17 @@
-# DeepSeek Harness Desktop — Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Added
-- Initial desktop shell with Electron
-- Harness runtime lifecycle management
-- Typed IPC bridge with allowlisted channels
-- Workspace selection and recent-workspace persistence
-- Error recovery UI with retry, logs, and diagnostic copy
-- Cross-platform CI (macOS, Windows, Linux)
-- Issue and PR templates
-
-### Changed
-- N/A
-
-### Fixed
-- N/A
-
-### Security
-- Loopback-only Harness binding
-- Launch token verification
-- Credential redaction in logs and diagnostics
+- Initial project scaffold with Electron + React + TypeScript
+- Harness runtime management (launch, health check, graceful shutdown)
+- Workspace selection via native dialog
+- Recent workspace persistence
+- Diagnostic export with credential redaction
+- Cross-platform packaging (macOS DMG, Windows NSIS, Linux AppImage/deb)
+- GitHub Actions CI (quality checks, packaging, release)
