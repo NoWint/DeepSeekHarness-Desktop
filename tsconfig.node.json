@@ -9,13 +9,12 @@
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "composite": true,
+    "composite": false,
     "declaration": true,
     "declarationMap": true,
     "outDir": "dist/main",
     "rootDir": "src",
     "tsBuildInfoFile": "node_modules/.cache/tsconfig.node.tsbuildinfo"
   },
-  "references": [{ "path": "./tsconfig.shared.json" }],
-  "include": ["src/main/**/*.ts", "src/preload/**/*.ts"]
+  "include": ["src/main/**/*.ts", "src/preload/**/*.ts", "src/shared/**/*.ts"]
 }

@@ -1,40 +1,22 @@
 /**
  * DeepSeek Harness Desktop — Main Process
  *
- * Electron main process that manages the Harness runtime lifecycle,
- * provides typed IPC handlers for the renderer, and configures native menus.
+ * Simple Electron shell that launches dsh web and loads its UI.
  */
 
-import {
-  app,
-  BrowserWindow,
-  clipboard,
-  dialog,
-  ipcMain,
-  Menu,
-  shell,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
-import { ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { spawn, ChildProcess } from "node:child_process";
+import { mkdirSync } from "node:fs";
 
-import { redact } from "../shared/redaction.js";
-import {
-  IPC_CHANNELS,
-  type DiagnosticBundle,
-  type RuntimeError,
-  type RuntimeStatus,
-} from "../shared/ipc.js";
 import { resolvePlatformPaths, type Platform } from "../shared/platform-paths.js";
+import { IPC_CHANNELS, type DiagnosticBundle, type RuntimeError, type RuntimeStatus, type WorkspaceSummary } from "../shared/ipc.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require(path.join(
   path.dirname(new URL(import.meta.url).pathname),
-  "..",
-  "..",
-  "..",
+  "..", "..", "..",
   "package.json",
 )) as { version: string };
 
@@ -44,26 +26,18 @@ const pkg = require(path.join(
 
 let mainWindow: BrowserWindow | null = null;
 let harnessProcess: ChildProcess | null = null;
-let launchToken: string | null = null;
-let currentPort: number | null = null;
-
-const MAX_RECENT_WORKSPACES = 10;
-const MAX_LOG_LINES = 300;
-const healthCheckPollIntervalMs = 500;
-const healthCheckMaxWaitMs = 30_000;
-const gracefulShutdownTimeoutMs = 5_000;
-
+let currentPort = 0;
 const logBuffer: string[] = [];
-const recentErrors: RuntimeError[] = [];
+const MAX_LOG_LINES = 300;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function getPlatform(): Platform {
-  const raw = process.platform as string;
-  if (raw === "darwin" || raw === "win32" || raw === "linux") return raw;
-  throw new Error(`Unsupported platform: ${raw}`);
+  const p = process.platform;
+  if (p === "darwin" || p === "win32" || p === "linux") return p as Platform;
+  throw new Error(`Unsupported platform: ${p}`);
 }
 
 function getPaths() {
@@ -74,374 +48,227 @@ function getPaths() {
 }
 
 function ensureDirectory(dir: string): void {
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch {
-    // Directory may already exist or be restricted
-  }
+  try { mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
 }
 
 function appendLog(message: string): void {
   logBuffer.push(message);
-  while (logBuffer.length > MAX_LOG_LINES) {
-    logBuffer.shift();
-  }
+  while (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
 }
 
-function pushError(error: RuntimeError): void {
-  recentErrors.unshift(error);
-  while (recentErrors.length > 50) {
-    recentErrors.pop();
-  }
+function sendToRenderer(channel: string, data: unknown): void {
+  mainWindow?.webContents.send(channel, data);
 }
 
-function makeRuntimeError(
-  code: RuntimeError["code"],
-  message: string,
-  extra?: Omit<RuntimeError & { kind: "runtime-error" }, "kind" | "code" | "message">,
-): RuntimeError {
+function buildStatus(state: RuntimeStatus["state"], extra?: Record<string, unknown>): RuntimeStatus {
   return {
-    kind: "runtime-error",
-    code,
-    message,
+    kind: "runtime-status",
+    state,
+    updatedAt: new Date().toISOString(),
     ...extra,
-  } as RuntimeError;
+  } as RuntimeStatus;
 }
 
-function buildStatus(state: RuntimeStatus["state"]): RuntimeStatus {
-  const base = { updatedAt: new Date().toISOString() } as const;
-
-  switch (state) {
-    case "idle":
-      return { kind: "runtime-status", state: "idle", ...base };
-    case "starting":
-      return {
-        kind: "runtime-status",
-        state: "starting",
-        ...base,
-        attempt: 1,
-        message: "Starting Harness runtime…",
-      };
-    case "ready":
-      if (currentPort === null || launchToken === null) {
-        throw new Error("Ready status requires port and token");
-      }
-      return {
-        kind: "runtime-status",
-        state: "ready",
-        ...base,
-        url: `http://127.0.0.1:${currentPort}/?token=${encodeURIComponent(launchToken)}`,
-        pid: harnessProcess?.pid ?? 0,
-      };
-    case "stopping":
-      return {
-        kind: "runtime-status",
-        state: "stopping",
-        ...base,
-        message: "Stopping Harness runtime…",
-      };
-    case "error": {
-      const err = recentErrors[0];
-      if (!err) throw new Error("Error status requires a recent error");
-      return { kind: "runtime-status", state: "error", ...base, error: err };
-    }
-    default:
-      throw new Error(`Unhandled runtime state: ${String(state)}`);
-  }
+function makeError(code: RuntimeError["code"], message: string, extra?: Partial<RuntimeError>): RuntimeError {
+  return { kind: "runtime-error", code, message, ...extra } as RuntimeError;
 }
 
-function freePort(): Promise<number> {
+async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    import("node:http").then(({ createServer }) => {
-      const s = createServer(() => {});
-      s.unref();
-      s.on("error", reject);
-      s.listen(0, "127.0.0.1", () => {
-        const port = (s.address() as { port: number }).port;
-        s.close(() => resolve(port));
-      });
+    const srv = require("node:http").createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => resolve(port));
     });
+    srv.on("error", reject);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Recent workspaces persistence
-// ---------------------------------------------------------------------------
-
-function loadRecentWorkspaces(): Set<string> {
-  try {
-    const paths = getPaths();
-    ensureDirectory(paths.appData);
-    const filePath = path.join(paths.appData, "recent-workspaces.json");
-    if (!existsSync(filePath)) return new Set();
-    const data = readFileSync(filePath, "utf8");
-    const arr = JSON.parse(data) as string[];
-    return new Set(arr);
-  } catch {
-    return new Set();
-  }
-}
-
-function saveRecentWorkspaces(set: Set<string>): void {
-  try {
-    const paths = getPaths();
-    ensureDirectory(paths.appData);
-    const filePath = path.join(paths.appData, "recent-workspaces.json");
-    writeFileSync(filePath, JSON.stringify(Array.from(set), null, 2));
-  } catch {
-    // silently ignore
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Harness Runtime Management
-// ---------------------------------------------------------------------------
-
-async function startRuntime(forceRestart = false): Promise<RuntimeStatus> {
-  if (harnessProcess && !forceRestart) {
-    return buildStatus("ready");
-  }
-
-  if (harnessProcess) {
-    await stopRuntime();
-  }
-
-  pushError(makeRuntimeError("launch-failed", "Harness runtime starting…"));
-  const startingStatus = buildStatus("starting");
-  sendToRenderer("runtime-status", startingStatus);
-
-  const paths = getPaths();
-  ensureDirectory(paths.harnessHome);
-  ensureDirectory(paths.logs);
-
-  launchToken = randomUUID();
-
-  let port: number;
-  try {
-    port = await freePort();
-  } catch {
-    const err = makeRuntimeError(
-      "port-unavailable",
-      "Could not allocate a free loopback port.",
-      { recoverable: true },
-    );
-    pushError(err);
-    appendLog("Port allocation failed");
-    return buildStatus("error");
-  }
-  currentPort = port;
-
-  const harnessBin = resolveHarnessEntry(paths);
-  const nodeBin = resolveNodeBinary(paths);
-  const args = ["web"];
-  const env = sanitizeEnvironment({
-    ...process.env,
-    DSH_HOME: paths.harnessHome,
-    PORT: String(port),
-    NODE_ENV: "production",
-  });
-
-  appendLog(`Launching harness: ${nodeBin} ${harnessBin} ${args.join(" ")} on port ${port}`);
-
-  let child: ChildProcess;
-  try {
-    child = spawn(nodeBin, [harnessBin, ...args], {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-  } catch (error) {
-    const err = makeRuntimeError(
-      "launch-failed",
-      `Failed to spawn Harness process: ${String(error)}`,
-    );
-    pushError(err);
-    currentPort = null;
-    launchToken = null;
-    return buildStatus("error");
-  }
-
-  harnessProcess = child;
-
-  child.stdout?.on("data", (chunk: Buffer) => {
-    const line = chunk.toString().trim();
-    if (line) appendLog(line);
-  });
-
-  child.stderr?.on("data", (chunk: Buffer) => {
-    const line = chunk.toString().trim();
-    if (line) appendLog(line);
-  });
-
-  child.on("close", (exitCode, signal) => {
-    appendLog(`Harness process exited: code=${exitCode} signal=${signal}`);
-    const wasExpected = mainWindow === null;
-    harnessProcess = null;
-    currentPort = null;
-    launchToken = null;
-
-    if (wasExpected) return;
-
-    const err = makeRuntimeError(
-      "unexpected-exit",
-      `Harness process exited unexpectedly: code=${exitCode}, signal=${signal}`,
-      { exitCode, recoverable: true },
-    );
-    pushError(err);
-    sendToRenderer("runtime-status", buildStatus("error"));
-  });
-
-  child.on("error", (error: Error) => {
-    appendLog(`Harness process error: ${error.message}`);
-    const err = makeRuntimeError(
-      "launch-failed",
-      `Harness process error: ${error.message}`,
-    );
-    pushError(err);
-    sendToRenderer("runtime-status", buildStatus("error"));
-  });
-
-  await waitForHealth(port, launchToken);
-  return buildStatus("ready");
-}
-
-function resolveHarnessEntry(paths: ReturnType<typeof getPaths>): string {
-  const bundledCli = path.join(paths.appData, "harness", "bin.js");
-  if (existsSync(bundledCli)) {
-    return bundledCli;
-  }
-  // Development fallback: resolve from local workspace
-  try {
-    return require.resolve("@deepseek-ai/dsh/lib/bin.js", {
-      paths: [import.meta.dirname],
-    });
-  } catch {
-    return bundledCli;
-  }
-}
-
-function resolveNodeBinary(paths: ReturnType<typeof getPaths>): string {
-  const bundledNode = path.join(paths.appData, "node", "bin", "node");
-  if (existsSync(bundledNode)) {
-    return bundledNode;
-  }
-  return process.execPath;
-}
-
-function sanitizeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const allowedPrefixes = ["PATH", "HOME", "USERPROFILE", "APPDATA", "NODE_PATH", "DSH_"];
-  const result: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(env ?? {})) {
-    if (value === undefined || value === null) continue;
-    const upperKey = key.toUpperCase();
-    const allowed = allowedPrefixes.some((prefix) => upperKey.startsWith(prefix));
-    if (allowed) result[key] = value;
-  }
-  return result;
-}
-
-async function waitForHealth(port: number, token: string): Promise<void> {
-  const deadline = Date.now() + healthCheckMaxWaitMs;
-  let attempts = 0;
-
-  while (Date.now() < deadline) {
-    attempts++;
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`,
-        { signal: AbortSignal.timeout(2000) },
-      );
-
-      if (!response.ok) {
-        if (attempts % 20 === 0) {
-          appendLog(`Health check attempt ${attempts}: HTTP ${response.status}`);
-        }
-        await delay(healthCheckPollIntervalMs);
-        continue;
-      }
-
-      const body = await response.text();
-      let data: { ok?: boolean; token?: string };
-      try {
-        data = JSON.parse(body);
-      } catch {
-        await delay(healthCheckPollIntervalMs);
-        continue;
-      }
-
-      if (data.ok !== true) {
-        await delay(healthCheckPollIntervalMs);
-        continue;
-      }
-
-      if (data.token !== token) {
-        const err = makeRuntimeError("token-mismatch", "Launch token mismatch during health check.");
-        pushError(err);
-        await stopRuntime();
-        return;
-      }
-
-      appendLog(`Harness health check passed after ${attempts} attempt(s)`);
-      return;
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        (error.message.includes("fetch") || error.message.includes("timeout") || error.message.includes("ECONNREFUSED"))
-      ) {
-        if (attempts % 10 === 0) {
-          appendLog(`Health check attempt ${attempts}: waiting…`);
-        }
-        await delay(healthCheckPollIntervalMs);
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  const err = makeRuntimeError(
-    "timeout",
-    `Harness did not become healthy within ${healthCheckMaxWaitMs / 1000}s`,
-  );
-  pushError(err);
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function stopRuntime(): Promise<void> {
+// ---------------------------------------------------------------------------
+// Harness Lifecycle
+// ---------------------------------------------------------------------------
+
+async function startHarness(): Promise<RuntimeStatus> {
+  if (harnessProcess) return buildStatus("ready", { url: `http://127.0.0.1:${currentPort}`, pid: harnessProcess.pid });
+
+  // Stop any previous instance
+  if (harnessProcess) await stopHarness();
+
+  const paths = getPaths();
+  ensureDirectory(paths.harnessHome);
+  ensureDirectory(paths.logs);
+
+  const port = await freePort();
+  currentPort = port;
+
+  appendLog(`Starting dsh web on port ${port}`);
+  sendToRenderer("runtime-status", buildStatus("starting", { message: `Starting Harness on port ${port}…` }));
+
+  const env = {
+    ...process.env,
+    DSH_HOME: paths.harnessHome,
+    PORT: String(port),
+    NODE_ENV: "production",
+  };
+
+  harnessProcess = spawn("dsh", ["web", "--port", String(port)], {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: false,
+  });
+
+  harnessProcess.stdout?.on("data", (chunk: Buffer) => {
+    const line = chunk.toString().trim();
+    if (line) appendLog(line);
+  });
+  harnessProcess.stderr?.on("data", (chunk: Buffer) => {
+    const line = chunk.toString().trim();
+    if (line) appendLog(line);
+  });
+
+  harnessProcess.on("close", (code, signal) => {
+    appendLog(`Harness exited: code=${code} signal=${signal}`);
+    harnessProcess = null;
+    currentPort = 0;
+    if (mainWindow) {
+      sendToRenderer("runtime-status", buildStatus("idle"));
+    }
+  });
+
+  harnessProcess.on("error", (err: Error) => {
+    appendLog(`Harness error: ${err.message}`);
+    harnessProcess = null;
+    currentPort = 0;
+    sendToRenderer("runtime-status", buildStatus("error", { error: makeError("launch-failed", `Failed to start Harness: ${err.message}`) }));
+  });
+
+  // Wait for server to be ready
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        appendLog(`Harness ready on port ${port}`);
+        sendToRenderer("runtime-status", buildStatus("ready", { url: `http://127.0.0.1:${port}`, pid: harnessProcess!.pid }));
+        return buildStatus("ready", { url: `http://127.0.0.1:${port}`, pid: harnessProcess.pid });
+      }
+    } catch { /* try again */ }
+    await delay(500);
+  }
+
+  const err = makeError("timeout", `Harness did not start within 30s`);
+  sendToRenderer("runtime-status", buildStatus("error", { error: err }));
+  return buildStatus("error", { error: err });
+}
+
+async function stopHarness(): Promise<void> {
   if (!harnessProcess) return;
-
-  appendLog("Requesting graceful Harness shutdown…");
-  const processRef = harnessProcess;
-  harnessProcess = null;
-  currentPort = null;
-  launchToken = null;
-
+  appendLog("Stopping Harness…");
+  harnessProcess.kill("SIGTERM");
   try {
-    processRef.kill("SIGTERM");
     await Promise.race([
-      waitForProcessExit(processRef, gracefulShutdownTimeoutMs),
-      delay(gracefulShutdownTimeoutMs).then(() => {
-        if (!processRef.killed) processRef.kill("SIGKILL");
+      new Promise<void>((resolve) => {
+        harnessProcess!.once("exit", () => resolve());
+        setTimeout(() => resolve(), 5000);
       }),
+      delay(5000),
     ]);
-    appendLog("Harness stopped gracefully.");
-  } catch {
-    appendLog("Harness shutdown timed out; force-killed.");
+  } finally {
+    if (!harnessProcess!.killed) harnessProcess!.kill("SIGKILL");
+    harnessProcess = null;
+    currentPort = 0;
   }
 }
 
-function waitForProcessExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-    proc.once("exit", () => { clearTimeout(timer); resolve(); });
-    proc.once("error", (err) => { clearTimeout(timer); reject(err); });
+// ---------------------------------------------------------------------------
+// Workspace Persistence
+// ---------------------------------------------------------------------------
+
+const RECENT_FILE = "recent-workspaces.json";
+
+function recentWorkspacesPath(paths: ReturnType<typeof getPaths>) {
+  return path.join(paths.appData, RECENT_FILE);
+}
+
+async function loadRecentWorkspaces(): Promise<WorkspaceSummary[]> {
+  try {
+    const raw = await import("node:fs/promises").then((fs) => fs.readFile(recentWorkspacesPath(getPaths()), "utf8"));
+    return JSON.parse(raw) as WorkspaceSummary[];
+  } catch { return []; }
+}
+
+async function saveRecentWorkspaces(workspaces: WorkspaceSummary[]): Promise<void> {
+  const sorted = workspaces.slice(0, 10);
+  await import("node:fs/promises").then((fs) =>
+    fs.writeFile(recentWorkspacesPath(getPaths()), JSON.stringify(sorted, null, 2))
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IPC Handlers
+// ---------------------------------------------------------------------------
+
+function registerHandlers(): void {
+  ipcMain.handle(IPC_CHANNELS.getRuntimeStatus, async () => {
+    if (!harnessProcess) return buildStatus("idle");
+    return buildStatus("ready", { url: `http://127.0.0.1:${currentPort}`, pid: harnessProcess.pid });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.restartRuntime, async () => {
+    await stopHarness();
+    return startHarness();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.selectWorkspace, async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ["openDirectory", "createDirectory"],
+      title: "Select or Create Workspace",
+    });
+    if (result?.canceled || !result?.filePaths[0]) return null;
+    const dir = result.filePaths[0];
+    const name = path.basename(dir);
+    const ws: WorkspaceSummary = { kind: "workspace", path: dir, name, lastOpenedAt: new Date().toISOString() };
+    const list = await loadRecentWorkspaces();
+    const filtered = list.filter((w) => w.path !== dir);
+    await saveRecentWorkspaces([ws, ...filtered]);
+    return ws;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.listRecentWorkspaces, async () => loadRecentWorkspaces());
+
+  ipcMain.handle(IPC_CHANNELS.openLogs, async () => {
+    const paths = getPaths();
+    ensureDirectory(paths.logs);
+    shell.openPath(paths.logs);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.copyDiagnostics, async () => {
+    const bundle: DiagnosticBundle = {
+      kind: "diagnostic-bundle",
+      createdAt: new Date().toISOString(),
+      appVersion: pkg.version,
+      platform: process.platform,
+      runtime: harnessProcess ? buildStatus("ready", { url: `http://127.0.0.1:${currentPort}`, pid: harnessProcess.pid }) : buildStatus("idle"),
+      recentErrors: [],
+      logs: logBuffer.slice(-MAX_LOG_LINES),
+    };
+    const { clipboard } = require("electron") as typeof import("electron");
+    clipboard.writeText(JSON.stringify(bundle, null, 2));
+    return bundle;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.quit, async () => {
+    await stopHarness();
+    app.quit();
   });
 }
 
 // ---------------------------------------------------------------------------
-// Window management
+// Window & Menu
 // ---------------------------------------------------------------------------
 
 function createWindow(): BrowserWindow {
@@ -464,301 +291,92 @@ function createWindow(): BrowserWindow {
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http://127.0.0.1:")) return { action: "allow" };
-    if (url.startsWith("https://")) {
-      shell.openExternal(url);
-      return { action: "deny" };
-    }
+    if (url.startsWith("https://")) { shell.openExternal(url); return { action: "deny" }; }
     return { action: "deny" };
   });
 
   win.webContents.on("will-navigate", (_event, url) => {
-    if (!url.startsWith("http://127.0.0.1:")) {
-      _event.preventDefault();
-    }
+    if (!url.startsWith("http://127.0.0.1:")) _event.preventDefault();
   });
 
   return win;
 }
 
-function loadWindowContent(win: BrowserWindow, status: RuntimeStatus): void {
-  if (status.state === "ready" && status.url) {
-    win.loadURL(status.url).catch((err) => {
-      appendLog(`Failed to load URL: ${String(err)}`);
-      pushError(makeRuntimeError("invalid-response", `Failed to load Harness UI: ${String(err)}`, { recoverable: true }));
-      sendToRenderer("runtime-status", buildStatus("error"));
-    });
-  } else {
-    const indexPath = path.join(import.meta.dirname, "..", "renderer", "index.html");
-    win.loadFile(indexPath).catch((err) => {
-      appendLog(`Failed to load index.html: ${String(err)}`);
-    });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// IPC Handlers
-// ---------------------------------------------------------------------------
-
-async function showDialog(): Promise<string | null> {
-  if (mainWindow === null) return null;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ["openDirectory", "createDirectory"],
-    title: "Select or create workspace",
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  return result.filePaths[0] ?? null;
-}
-
-function registerIpcHandlers(): void {
-  ipcMain.handle(IPC_CHANNELS.getRuntimeStatus, () => {
-    if (harnessProcess && currentPort !== null) {
-      return buildStatus("ready");
-    }
-    return buildStatus("idle");
-  });
-
-  ipcMain.handle(IPC_CHANNELS.restartRuntime, async () => {
-    appendLog("Restart requested by renderer.");
-    const status = await startRuntime(true);
-    sendToRenderer("runtime-status", status);
-    return status;
-  });
-
-  ipcMain.handle(IPC_CHANNELS.selectWorkspace, async () => {
-    const selectedPath = await showDialog();
-    if (selectedPath === null) return null;
-    addToRecentWorkspaces(selectedPath);
-    return {
-      kind: "workspace" as const,
-      path: selectedPath,
-      name: selectedPath.split(/[\\/]/).pop() ?? selectedPath,
-      lastOpenedAt: new Date().toISOString(),
-    };
-  });
-
-  ipcMain.handle(IPC_CHANNELS.listRecentWorkspaces, () => {
-    const set = loadRecentWorkspaces();
-    return Array.from(set).map((p) => ({
-      kind: "workspace" as const,
-      path: p,
-      name: p.split(/[\\/]/).pop() ?? p,
-      lastOpenedAt: new Date().toISOString(),
-    }));
-  });
-
-  ipcMain.handle(IPC_CHANNELS.openLogs, () => {
-    const paths = getPaths();
-    ensureDirectory(paths.logs);
-    shell.openPath(paths.logs).catch(() => {});
-  });
-
-  ipcMain.handle(IPC_CHANNELS.copyDiagnostics, async () => {
-    const bundle: DiagnosticBundle = {
-      kind: "diagnostic-bundle",
-      createdAt: new Date().toISOString(),
-      appVersion: pkg.version,
-      platform: process.platform,
-      runtime: buildStatus("error"),
-      recentErrors: recentErrors.map((e) => redact(e) as RuntimeError),
-      logs: [...logBuffer],
-    };
-    clipboard.writeText(JSON.stringify(bundle, null, 2));
-    return bundle;
-  });
-
-  ipcMain.handle(IPC_CHANNELS.quit, () => {
-    app.quit();
-  });
-}
-
-function addToRecentWorkspaces(workspacePath: string): void {
-  const set = loadRecentWorkspaces();
-  const normalized = path.normalize(workspacePath);
-  set.delete(normalized);
-  set.add(normalized);
-  while (set.size > MAX_RECENT_WORKSPACES) {
-    const first = Array.from(set).shift();
-    if (first !== undefined) set.delete(first);
-  }
-  saveRecentWorkspaces(set);
-}
-
-// ---------------------------------------------------------------------------
-// Renderer communication
-// ---------------------------------------------------------------------------
-
-function sendToRenderer(channel: string, data: unknown): void {
-  if (mainWindow !== null && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Native Menu
-// ---------------------------------------------------------------------------
-
-function buildMenu(): void {
+function createMenu(): void {
   const template: Electron.MenuItemConstructorOptions[] = [
-    {
-      label: "Application",
-      submenu: [
-        { label: "About DeepSeek Harness", role: "about" },
-        { type: "separator" },
-        {
-          label: "Start/Restart Harness",
-          click: async () => {
-            const status = await startRuntime(true);
-            sendToRenderer("runtime-status", status);
-          },
-        },
-        { type: "separator" },
-        { label: "Hide", role: "hide" },
-        { label: "Hide Others", role: "hideOthers" },
-        { type: "separator" },
-        { label: "Quit", accelerator: "CommandOrControl+Q", role: "quit" },
-      ],
-    },
     {
       label: "File",
       submenu: [
-        {
-          label: "Select Workspace…",
-          accelerator: "CommandOrControl+O",
-          click: async () => {
-            const selectedPath = await showDialog();
-            if (selectedPath !== null) {
-              addToRecentWorkspaces(selectedPath);
-            }
-          },
-        },
+        { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => createWindow() },
         { type: "separator" },
-        { label: "Close Window", role: "close" },
+        { label: "Restart Harness", accelerator: "CmdOrCtrl+R", click: async () => {
+          await stopHarness();
+          const status = await startHarness();
+          if (status.state === "ready" && mainWindow) mainWindow.loadURL(status.url!);
+        }},
+        { type: "separator" },
+        { label: "Quit", accelerator: "CmdOrCtrl+Q", click: () => { app.quit(); } },
       ],
     },
     {
       label: "View",
       submenu: [
-        { label: "Reload", accelerator: "CommandOrControl+R", role: "reload" },
-        {
-          label: "Force Reload",
-          accelerator: "CommandOrControl+Shift+R",
-          role: "forceReload",
-        },
-        { type: "separator" },
-        { label: "Toggle Developer Tools", role: "toggleDevTools" },
-        { type: "separator" },
-        { label: "Actual Size", role: "resetZoom" },
-        { label: "Zoom In", role: "zoomIn" },
-        { label: "Zoom Out", role: "zoomOut" },
-        { type: "separator" },
-        { label: "Toggle Full Screen", role: "togglefullscreen" },
+        { label: "Reload", accelerator: "CmdOrCtrl+Shift+R", click: () => mainWindow?.reload() },
+        { label: "Toggle DevTools", accelerator: "Alt+CmdOrCtrl+I", click: () => mainWindow?.webContents.openDevTools() },
       ],
     },
     {
       label: "Help",
       submenu: [
         {
-          label: "Open Logs",
-          click: () => {
-            const paths = getPaths();
-            ensureDirectory(paths.logs);
-            shell.openPath(paths.logs).catch(() => {});
-          },
-        },
-        {
-          label: "Copy Diagnostics",
-          click: async () => {
-            const bundle: DiagnosticBundle = {
-              kind: "diagnostic-bundle",
-              createdAt: new Date().toISOString(),
-              appVersion: pkg.version,
-              platform: process.platform,
-              runtime: buildStatus("error"),
-              recentErrors: recentErrors.map((e) => redact(e) as RuntimeError),
-              logs: [...logBuffer],
-            };
-            clipboard.writeText(JSON.stringify(bundle, null, 2));
-          },
-        },
-        { type: "separator" },
-        {
-          label: "DeepSeek Harness Documentation",
-          click: () =>
-            shell.openExternal("https://github.com/deepseek-ai/deepseek-harness"),
-        },
-        {
-          label: "DeepSeek Harness Desktop Issues",
-          click: () =>
-            shell.openExternal("https://github.com/NoWint/DeepSeekHarness-Desktop/issues"),
+          label: "GitHub Repository",
+          click: () => shell.openExternal("https://github.com/deepseek-ai/deepseek-harness"),
         },
       ],
     },
   ];
-
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // ---------------------------------------------------------------------------
-// App Lifecycle
+// App Startup
 // ---------------------------------------------------------------------------
 
-const gotLock = app.requestSingleInstanceLock();
+async function main(): Promise<void> {
+  await app.whenReady();
 
-if (!gotLock) {
-  app.quit();
-} else {
-  app.on("second-instance", (_event, argv) => {
-    if (mainWindow !== null) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+  const paths = getPaths();
+  ensureDirectory(paths.harnessHome);
+  ensureDirectory(paths.logs);
+
+  createMenu();
+  mainWindow = createWindow();
+  registerHandlers();
+
+  // Load renderer first, then start harness in background
+  const indexPath = path.join(import.meta.dirname, "..", "renderer", "index.html");
+  mainWindow.loadFile(indexPath);
+
+  // Start harness after a brief delay to let renderer initialize
+  setTimeout(async () => {
+    const status = await startHarness();
+    sendToRenderer("runtime-status", status);
+    if (status.state === "ready" && status.url) {
+      mainWindow?.loadURL(status.url);
     }
-    const deepLink = argv.find((arg) => arg.startsWith("deepseek-harness://"));
-    if (deepLink) appendLog(`Deep link received: ${deepLink}`);
-  });
+  }, 500);
 
-  app.whenReady().then(async () => {
-    registerIpcHandlers();
-    buildMenu();
-    mainWindow = createWindow();
-
-    const indexPath = path.join(import.meta.dirname, "..", "renderer", "index.html");
-
-    // Development mode: load Vite dev server directly
-    if (process.env.NODE_ENV === "development") {
-      mainWindow.loadURL("http://127.0.0.1:5173/").catch((err) => {
-        appendLog(`Failed to load Vite dev server: ${String(err)}`);
-      });
-      // Enable DevTools in development
-      mainWindow.webContents.openDevTools();
-    } else {
-      mainWindow.loadFile(indexPath).catch((err) => {
-        appendLog(`Failed to load renderer: ${String(err)}`);
-      });
-
-      const status = await startRuntime();
-      sendToRenderer("runtime-status", status);
-      if (status.state === "ready") {
-        loadWindowContent(mainWindow, status);
-      }
-    }
-
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = createWindow();
-        mainWindow.loadFile(indexPath).catch(() => {});
-      }
-    });
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
   app.on("window-all-closed", () => {
+    stopHarness().catch(() => undefined);
     if (process.platform !== "darwin") app.quit();
   });
-
-  app.on("before-quit", async () => {
-    await stopRuntime();
-  });
-
-  app.on("quit", () => {
-    appendLog("Application quitting.");
-  });
 }
+
+main().catch((err) => {
+  console.error("Failed to start:", err);
+  app.quit();
+});

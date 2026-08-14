@@ -42,28 +42,33 @@ test("package manifest exposes the shared project quality and packaging scripts"
 
 test("Node and web TypeScript projects use strict compiler settings and share IPC contracts", async () => {
   const rootConfig = await readJson("tsconfig.json");
-  const sharedConfig = await readJson("tsconfig.shared.json");
   const nodeConfig = await readJson("tsconfig.node.json");
   const webConfig = await readJson("tsconfig.web.json");
+  const toolingConfig = await readJson("tsconfig.tooling.json");
 
   assert.equal(rootConfig.compilerOptions?.strict, true);
-  assert.equal(sharedConfig.compilerOptions?.strict, true);
   assert.equal(nodeConfig.compilerOptions?.strict, true);
   assert.equal(webConfig.compilerOptions?.strict, true);
+  assert.equal(toolingConfig.compilerOptions?.strict, true);
+  // Node and web configs have different includes (Node has main/preload, web has renderer)
   assert.notDeepEqual(nodeConfig.include, webConfig.include);
+  // Root references are node, web, and tooling only (no shared project)
   assert.deepEqual(rootConfig.references, [
-    { path: "./tsconfig.shared.json" },
     { path: "./tsconfig.node.json" },
     { path: "./tsconfig.web.json" },
     { path: "./tsconfig.tooling.json" },
   ]);
-  assert.deepEqual(nodeConfig.references, [{ path: "./tsconfig.shared.json" }]);
-  assert.deepEqual(webConfig.references, [{ path: "./tsconfig.shared.json" }]);
-  assert.deepEqual(sharedConfig.include, ["src/shared/**/*.ts"]);
-  assert.equal(sharedConfig.compilerOptions?.outDir, "dist/main");
-  assert.equal(sharedConfig.compilerOptions?.rootDir, "src");
-  assert.equal(nodeConfig.include.includes("src/shared/**/*.ts"), false);
-  assert.equal(webConfig.include.includes("src/shared/**/*.ts"), false);
+  // Both node and web include shared sources directly
+  assert.deepEqual(
+    nodeConfig.include.filter((p) => p.includes("shared")),
+    ["src/shared/**/*.ts"],
+  );
+  assert.deepEqual(
+    webConfig.include.filter((p) => p.includes("shared")),
+    ["src/shared/**/*.ts"],
+  );
+  // Shared files must be excluded from test inclusion
+  assert.equal(webConfig.exclude?.includes("src/shared/**/*.test.ts"), true);
 });
 
 test("Electron production emit excludes Vite and Vitest tooling configuration", async () => {
